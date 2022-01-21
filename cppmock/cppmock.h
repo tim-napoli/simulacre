@@ -41,7 +41,7 @@ struct CPPMock
     * appels à `_pNewFunctionAddress`.
     * Retourne `S_OK` si les appels ont effectivement été remplacés, ou `E_FAIL` dans le cas
     * contraire.
-    * 
+    *
     * REMARQUES
     * Pour l'instant, seules les instructions call relatifs (opcode 0x86) sont supportées.
     *
@@ -49,6 +49,15 @@ struct CPPMock
     * Supporter les instructions calls absolus (0xff, 0x9a).
     */
    HRESULT mockFunction(void* _pFunctionAddress, void* _pOldFunctionAddress, void* _pNewFunctionAddress);
+
+   template<typename FunctionType>
+   static void* getMemberFunctionAddress(FunctionType _function) {
+      union {
+         FunctionType function;
+         void* functionAddress;
+      } u = { _function };
+      return u.functionAddress;
+   }
 
 
    std::string m_sModuleName;

@@ -32,6 +32,13 @@ void* simpleFunctionToMockWithNearAbsoluteIndirectCall() {
 }
 
 
+struct ObjectToMock {
+	int simpleFunctionToMockWithNearRelativeCall() {
+		return foo();
+	}
+};
+
+
 namespace cppmocktests
 {
 	TEST_CLASS(cppmocktests)
@@ -56,6 +63,16 @@ namespace cppmocktests
 		{
 			CPPMock cppMock("cppmock-tests.dll");
 			Assert::AreEqual(cppMock.mockFunction((void*)0x12345678, &foo, &bar), E_FAIL);
+		}
+
+		TEST_METHOD(mockFunction_object_simpleFunctionToMockWithNearAbsoluteIndirectCall)
+		{
+			CPPMock cppMock("cppmock-tests.dll");
+
+			ObjectToMock objectToMock;
+
+			Assert::AreEqual(cppMock.mockFunction(CPPMock::getMemberFunctionAddress(&ObjectToMock::simpleFunctionToMockWithNearRelativeCall), &foo, &bar), S_OK);
+			Assert::AreEqual(objectToMock.simpleFunctionToMockWithNearRelativeCall(), 0xba4);
 		}
 	};
 }
