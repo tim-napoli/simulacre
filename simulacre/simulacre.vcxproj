@@ -22,8 +22,9 @@
     <VCProjectVersion>16.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid>{4ab94d48-a05b-461d-a637-dd61d43044e4}</ProjectGuid>
-    <RootNamespace>cppmock</RootNamespace>
+    <RootNamespace>simulacre</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <ProjectName>simulacre</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
@@ -140,10 +141,10 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="cppmock.cpp" />
+    <ClCompile Include="simulacre.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="cppmock.h" />
+    <ClInclude Include="simulacre.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
