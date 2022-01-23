@@ -59,7 +59,7 @@ CPPMock::~CPPMock()
 
 
 
-ULONG64 CPPMock::getFunctionSymbolAddress(void* _pFunctionAddress)
+ULONG64 CPPMock::getSymbolAddress(void* _pFunctionAddress)
 {
    HMODULE hModule = GetModuleHandleA((m_sModuleName.empty()) ? nullptr : m_sModuleName.c_str());
    if (hModule == nullptr) {
@@ -75,24 +75,37 @@ ULONG64 CPPMock::getFunctionSymbolAddress(void* _pFunctionAddress)
 
 
 
-HRESULT CPPMock::mockFunction(void* _pFunctionAddress, void* _pOldFunctionAddress, void* _pNewFunctionAddress)
+SYMBOL_INFO* CPPMock::getSymbol(void* _pFunctionAddress)
 {
-   // On récupère le symbole qui correspond à la fonction afin de déterminer sa taille.
+   ULONG64 ul64SymbolAddress = getSymbolAddress(_pFunctionAddress);
+   if (!ul64SymbolAddress) {
+      return nullptr;
+   }
+
    SYMBOL_INFO* pSymbolInfo = (SYMBOL_INFO*)malloc(sizeof(SYMBOL_INFO) + 128);
+   if (pSymbolInfo == nullptr) {
+      return nullptr;
+   }
+
    memset(pSymbolInfo, 0, sizeof(SYMBOL_INFO) + 128);
    pSymbolInfo->SizeOfStruct = sizeof(SYMBOL_INFO);
    pSymbolInfo->MaxNameLen = 127;
-   if (!SymFromAddr(m_hProcess, getFunctionSymbolAddress(_pFunctionAddress), 0, pSymbolInfo)) {
-      std::cerr << "CPPMock::mockFunction(): unable to find symbol address for function "
-                << std::hex << _pFunctionAddress
-                << " (error " << GetLastError() << ")" << std::endl;
-      return E_FAIL;
+   if (!SymFromAddr(m_hProcess, ul64SymbolAddress, 0, pSymbolInfo)) {
+      free(pSymbolInfo);
+      return nullptr;
    }
 
+   return pSymbolInfo;
+}
+
+
+
+
+HRESULT CPPMock::rewriteFunctionCodeCalls(void* _pFunctionAddress, size_t _sizeFunctionSize, void* _pOldFunctionAddress, void* _pNewFunctionAddress)
+{
    // Lecture du code de la fonction
-   std::vector<uint8_t> vFunctionCode(pSymbolInfo->Size, 0);
-   memcpy(vFunctionCode.data(), _pFunctionAddress, pSymbolInfo->Size);
-   free(pSymbolInfo);
+   std::vector<uint8_t> vFunctionCode(_sizeFunctionSize, 0);
+   memcpy(vFunctionCode.data(), _pFunctionAddress, _sizeFunctionSize);
 
    // Recherche des calls référençants `_pOldFunctionAddress` et modification du code.
    for (size_t i = 0; i < vFunctionCode.size(); i++) {
@@ -135,4 +148,81 @@ HRESULT CPPMock::mockFunction(void* _pFunctionAddress, void* _pOldFunctionAddres
    }
 
    return S_OK;
+}
+
+
+
+
+HRESULT CPPMock::mockFunction(void* _pFunctionAddress, void* _pOldFunctionAddress, void* _pNewFunctionAddress)
+{
+   // On récupère le symbole qui correspond à la fonction afin de déterminer sa taille.
+   SYMBOL_INFO* pSymbolInfo = getSymbol(_pFunctionAddress);
+   if (pSymbolInfo == nullptr) {
+      std::cerr << "CPPMock::mockFunction(): unable to find symbol address for function "
+                << std::hex << _pFunctionAddress
+                << " (error " << GetLastError() << ")" << std::endl;
+      return E_FAIL;
+   }
+   size_t sizeFunctionSize = pSymbolInfo->Size;
+   free(pSymbolInfo);
+
+   return rewriteFunctionCodeCalls(_pFunctionAddress, sizeFunctionSize, _pOldFunctionAddress, _pNewFunctionAddress);
+}
+
+
+
+
+void* CPPMock::getVirtualMethodAddress(void* _pObjectInstance, const std::string& _sVirtualMethodeName, size_t& _sizeVirtualMethodeSize)
+{
+   void* pVtable = (void*)*(uint32_t*)_pObjectInstance;
+   SYMBOL_INFO* pSymbolInfo = getSymbol(pVtable);
+   if (!pSymbolInfo) {
+      return nullptr;
+   }
+   size_t sizeVtable = (pSymbolInfo->Size - 4) / 4;
+   free(pSymbolInfo);
+
+   void* pAddr = nullptr;
+   for (size_t i = 0; i < sizeVtable; i++) {
+      void* pVFunctionAddress = (void*)*((int*)pVtable + i);
+      SYMBOL_INFO* pFunctionSymbolInfo = getSymbol(pVFunctionAddress);
+      if (pFunctionSymbolInfo == nullptr) {
+         // NOTE perhaps we should fail here. Indeed, it would be a bad news to don't
+         //      find functions symbols.
+         continue;
+      }
+      std::string sSymbolName = pFunctionSymbolInfo->Name;
+      size_t sizeVirtualMethodSize = pFunctionSymbolInfo->Size;
+      free(pFunctionSymbolInfo);
+      size_t sizeSuffixPosition = sSymbolName.find_last_of("::");
+      if (sizeSuffixPosition == sSymbolName.npos) {
+         continue;
+      }
+      std::string sMethodName = sSymbolName.substr(sizeSuffixPosition + 1);
+      if (sMethodName.size() == _sVirtualMethodeName.size()
+      &&  sMethodName.compare(_sVirtualMethodeName) == 0)
+      {
+         pAddr = pVFunctionAddress;
+         _sizeVirtualMethodeSize = sizeVirtualMethodSize;
+         break;
+      }
+   }
+
+   return pAddr;
+}
+
+
+
+
+HRESULT CPPMock::mockVirtualMethod(void* _pObjectInstance, const std::string& _sVirtualMethodName, void* _pOldFunctionAddress, void* _pNewFunctionAddress)
+{
+   size_t sizeMethodSize = 0;
+   void* pMethodAddress = getVirtualMethodAddress(_pObjectInstance, _sVirtualMethodName, sizeMethodSize);
+   if (pMethodAddress == nullptr) {
+      std::cerr << "CPPMock::mockVirtualMethod(): unable to find symbol address for function "
+                << _sVirtualMethodName << std::endl;
+      return E_FAIL;
+   }
+
+   return rewriteFunctionCodeCalls(pMethodAddress, sizeMethodSize, _pOldFunctionAddress, _pNewFunctionAddress);
 }
