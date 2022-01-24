@@ -18,6 +18,7 @@ Simulacre::Simulacre(const std::string& _sModuleName)
    , m_hProcess(nullptr)
    , m_dwProcessBaseAddress(0)
    , m_vui32CallIndirectTable { }
+   , m_vsSavedFunctions { }
 {
    m_hProcess = GetCurrentProcess();
    if (!SymInitialize(m_hProcess, nullptr, FALSE)) {
@@ -52,6 +53,8 @@ Simulacre::Simulacre(const std::string& _sModuleName)
 
 Simulacre::~Simulacre()
 {
+   restoreOriginalFunctions();
+
    SymUnloadModule(m_hProcess, m_dwProcessBaseAddress);
    SymCleanup(m_hProcess);
 }
@@ -147,6 +150,10 @@ HRESULT Simulacre::replaceFunctionCalls(void* _pFunctionAddress, size_t _sizeFun
    std::vector<uint8_t> vFunctionCode(_sizeFunctionSize, 0);
    memcpy(vFunctionCode.data(), _pFunctionAddress, _sizeFunctionSize);
 
+   m_vsSavedFunctions.push_back({
+      _pFunctionAddress, vFunctionCode
+   });
+
    // Search and replace calls of `_pOldFunctionAddress` with calls of `_pNewFunctionAddress`
    for (size_t i = 0; i < vFunctionCode.size(); i++) {
       int32_t iAbsoluteCodeAddress = (int32_t)(((char*)_pFunctionAddress) + i);
@@ -186,6 +193,7 @@ HRESULT Simulacre::replaceFunctionCalls(void* _pFunctionAddress, size_t _sizeFun
    {
       std::cerr << "Simulacre::replaceFunctionCalls: unable to rewrite process memory for function "
                 << std::hex << _pFunctionAddress << "(error " << GetLastError() <<  ")" << std::endl;
+      m_vsSavedFunctions.pop_back();
       return E_FAIL;
    }
 
@@ -245,4 +253,24 @@ HRESULT Simulacre::mockVirtualMethod(const std::string& _sVirtualMethodName,
    return replaceFunctionCalls(
       pMethodAddress, sizeMethodSize, _pOldFunctionAddress, _pNewFunctionAddress
    );
+}
+
+
+
+
+HRESULT Simulacre::restoreOriginalFunctions()
+{
+   for (auto& it : m_vsSavedFunctions) {
+      BOOL bWriteResult = WriteProcessMemory(
+         m_hProcess, it.pAddress, it.vu8Code.data(), it.vu8Code.size(), nullptr
+      );
+      if (!bWriteResult)
+      {
+         std::cerr << "Simulacre::restoreOriginalFunctions: unable to restore function code of"
+                   << std::hex << it.pAddress << "(error " << GetLastError() <<  ")" << std::endl;
+         return E_FAIL;
+      }
+   }
+   m_vsSavedFunctions.clear();
+   return S_OK;
 }

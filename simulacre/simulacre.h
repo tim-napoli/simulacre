@@ -104,6 +104,15 @@ struct Simulacre
                              void* _pOldFunctionAddress, void* _pNewFunctionAddress);
 
 
+   /* restoreOriginalFunctions()
+    *
+    * When Simulacre exit the scope, or on demand, this function restore the original code of every
+    * patched function.
+    * Returns `S_OK` in case of success, or `E_FAIL` otherwise.
+    */
+   HRESULT restoreOriginalFunctions();
+
+
    /* getMemberFunctionAddress()
     *
     * Retourne l'adresse de la méthode donnée en paramètre.
@@ -118,8 +127,15 @@ struct Simulacre
    }
 
 
+   struct FunctionCode {
+      void* pAddress;
+      std::vector<uint8_t> vu8Code;
+   };
+
+
    std::string m_sModuleName;
    HANDLE m_hProcess;
    DWORD  m_dwProcessBaseAddress;
    std::vector<uint32_t> m_vui32CallIndirectTable;
+   std::vector<FunctionCode> m_vsSavedFunctions;
 };

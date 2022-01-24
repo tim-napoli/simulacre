@@ -128,5 +128,30 @@ namespace simulacretests
 			ObjectToMockWithVirtualMethod object;
 			Assert::AreEqual(simulacre.mockVirtualMethod("ObjectToMockWithVirtualMethod::notExistingMethod", &foo, &bar), E_FAIL);
 		}
+
+		// Disable optimisation otherwise `simpleFunctionToMockWithNearRelativeCall()` is not called twice.
+		#pragma optimize( "", off )
+		TEST_METHOD(restoreOriginalFunctions)
+		{
+			Simulacre simulacre("simulacre-tests.dll");
+			Assert::AreEqual(simulacre.mock(&simpleFunctionToMockWithNearRelativeCall, &foo, &bar), S_OK);
+			Assert::AreEqual(simpleFunctionToMockWithNearRelativeCall(), 0xba4);
+			Assert::AreEqual(simulacre.restoreOriginalFunctions(), S_OK);
+
+			Assert::AreEqual(simpleFunctionToMockWithNearRelativeCall(), 0xf00);
+		}
+
+		// Same remark as above.
+		#pragma optimize( "", off )
+		TEST_METHOD(restoreOriginalFunctions_onScopeExit)
+		{
+			{
+				Simulacre simulacre("simulacre-tests.dll");
+				Assert::AreEqual(simulacre.mock(&simpleFunctionToMockWithNearRelativeCall, &foo, &bar), S_OK);
+				Assert::AreEqual(simpleFunctionToMockWithNearRelativeCall(), 0xba4);
+			}
+			volatile int iNewCallResult = simpleFunctionToMockWithNearRelativeCall();
+			Assert::IsTrue(iNewCallResult == 0xf00);
+		}
 	};
 }
