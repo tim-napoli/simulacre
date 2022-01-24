@@ -46,6 +46,8 @@ Simulacre::Simulacre(const std::string& _sModuleName)
       std::cerr << "Simulacre::Simulacre(): unable to load module" << std::endl;
       throw;
    }
+
+   m_vui32CallIndirectTable.reserve(128);
 }
 
 
@@ -178,6 +180,12 @@ HRESULT Simulacre::replaceFunctionCalls(void* _pFunctionAddress, size_t _sizeFun
          memcpy(&iCallAbsoluteAddress, (void*)iCallAbsoluteAddressAddress, sizeof(uint32_t));
          if (iCallAbsoluteAddress == (uint32_t)_pOldFunctionAddress) {
             // Replace absolute address
+            if (m_vui32CallIndirectTable.size() == m_vui32CallIndirectTable.capacity()) {
+               std::cerr << "Simulacre::replaceFunctionCalls: Failure to replace absolute indirect call :"
+                         << "call table is full"
+                         << std::endl;
+               return E_FAIL;
+            }
             m_vui32CallIndirectTable.push_back((uint32_t)_pNewFunctionAddress);
             uint32_t ui32IndirectAddr = (uint32_t)&m_vui32CallIndirectTable.back();
             memcpy(vFunctionCode.data() + i + 2, &ui32IndirectAddr, sizeof(uint32_t));
