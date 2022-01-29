@@ -13,26 +13,29 @@
 
 
 
+#define LOG_ERROR(_fmt, ...) \
+      fprintf(stderr, "%s:%d: " _fmt, __FUNCTION__, __LINE__, __VA_ARGS__)
+
+
+
+
+#define SIMULACRE_MAX_INDIRECT_CALLS   128
+
+
+
+
 Simulacre::Simulacre(const std::string& _sModuleName)
    : m_sModuleName(_sModuleName)
    , m_hProcess(nullptr)
    , m_dwProcessBaseAddress(0)
-   , m_vui32CallIndirectTable { }
+   , m_vui32IndirectCallsTable { }
    , m_vsSavedFunctions { }
 {
    m_hProcess = GetCurrentProcess();
    if (!SymInitialize(m_hProcess, nullptr, FALSE)) {
-      std::cerr << "Simulacre::Simulacre(): unable to find symbols for current process" << std::endl;
+      LOG_ERROR("unable to initialize symbols for current process (error %d)", GetLastError());
       throw;
    }
-
-   SymSetOptions(SYMOPT_DEBUG);
-
-   char szCurrentDirectory[2048] = "";
-   GetCurrentDirectoryA(sizeof(szCurrentDirectory), szCurrentDirectory);
-
-   char szSearchPath[2048] = "";
-   SymGetSearchPath(m_hProcess, szSearchPath, sizeof(szSearchPath) - 1);
 
    char szProcessName[512] = "";
    if (_sModuleName.empty()) {
@@ -43,11 +46,11 @@ Simulacre::Simulacre(const std::string& _sModuleName)
    }
    m_dwProcessBaseAddress = SymLoadModule(m_hProcess, nullptr, szProcessName, nullptr, 0, 0);
    if (m_dwProcessBaseAddress == 0) {
-      std::cerr << "Simulacre::Simulacre(): unable to load module" << std::endl;
+      LOG_ERROR("unable to load symbol table for module %s (error %d)", szProcessName, GetLastError());
       throw;
    }
 
-   m_vui32CallIndirectTable.reserve(128);
+   m_vui32IndirectCallsTable.reserve(SIMULACRE_MAX_INDIRECT_CALLS);
 }
 
 
@@ -98,9 +101,9 @@ void* Simulacre::symbolToProcessAddress(ULONG64 _ul64VirtualAddress)
 
 
 
-SYMBOL_INFO* Simulacre::getSymbol(void* _pFunctionAddress)
+SYMBOL_INFO* Simulacre::getSymbol(void* _pProcessAddress)
 {
-   ULONG64 ul64SymbolAddress = getSymbolAddress(_pFunctionAddress);
+   ULONG64 ul64SymbolAddress = getSymbolAddress(_pProcessAddress);
    if (!ul64SymbolAddress) {
       return nullptr;
    }
@@ -114,6 +117,7 @@ SYMBOL_INFO* Simulacre::getSymbol(void* _pFunctionAddress)
    pSymbolInfo->SizeOfStruct = sizeof(SYMBOL_INFO);
    pSymbolInfo->MaxNameLen = 127;
    if (!SymFromAddr(m_hProcess, ul64SymbolAddress, 0, pSymbolInfo)) {
+      LOG_ERROR("unable to find symbol address for symbol %p (error %d)", _pProcessAddress, GetLastError());
       free(pSymbolInfo);
       return nullptr;
    }
@@ -135,6 +139,7 @@ SYMBOL_INFO* Simulacre::getSymbolFromName(const std::string& _sSymbolName)
    pSymbolInfo->SizeOfStruct = sizeof(SYMBOL_INFO);
    pSymbolInfo->MaxNameLen = 127;
    if (!SymFromName(m_hProcess, _sSymbolName.c_str(), pSymbolInfo)) {
+      LOG_ERROR("unable to find symbol %s (error %d)", _sSymbolName.c_str(), GetLastError());
       free(pSymbolInfo);
       return nullptr;
    }
@@ -148,10 +153,9 @@ SYMBOL_INFO* Simulacre::getSymbolFromName(const std::string& _sSymbolName)
 HRESULT Simulacre::replaceFunctionCalls(void* _pFunctionAddress, size_t _sizeFunctionSize,
                                         void* _pOldFunctionAddress, void* _pNewFunctionAddress)
 {
-   // Read function code.
+   // Read function code
    std::vector<uint8_t> vFunctionCode(_sizeFunctionSize, 0);
    memcpy(vFunctionCode.data(), _pFunctionAddress, _sizeFunctionSize);
-
    m_vsSavedFunctions.push_back({
       _pFunctionAddress, vFunctionCode
    });
@@ -180,14 +184,12 @@ HRESULT Simulacre::replaceFunctionCalls(void* _pFunctionAddress, size_t _sizeFun
          memcpy(&iCallAbsoluteAddress, (void*)iCallAbsoluteAddressAddress, sizeof(uint32_t));
          if (iCallAbsoluteAddress == (uint32_t)_pOldFunctionAddress) {
             // Replace absolute address
-            if (m_vui32CallIndirectTable.size() == m_vui32CallIndirectTable.capacity()) {
-               std::cerr << "Simulacre::replaceFunctionCalls: Failure to replace absolute indirect call :"
-                         << "call table is full"
-                         << std::endl;
+            if (m_vui32IndirectCallsTable.size() == m_vui32IndirectCallsTable.capacity()) {
+               LOG_ERROR("unable to patch absolute indirect call in %p: call table is full", _pFunctionAddress);
                return E_FAIL;
             }
-            m_vui32CallIndirectTable.push_back((uint32_t)_pNewFunctionAddress);
-            uint32_t ui32IndirectAddr = (uint32_t)&m_vui32CallIndirectTable.back();
+            m_vui32IndirectCallsTable.push_back((uint32_t)_pNewFunctionAddress);
+            uint32_t ui32IndirectAddr = (uint32_t)&m_vui32IndirectCallsTable.back();
             memcpy(vFunctionCode.data() + i + 2, &ui32IndirectAddr, sizeof(uint32_t));
          }
       }
@@ -199,8 +201,7 @@ HRESULT Simulacre::replaceFunctionCalls(void* _pFunctionAddress, size_t _sizeFun
    );
    if (!bWriteResult)
    {
-      std::cerr << "Simulacre::replaceFunctionCalls: unable to rewrite process memory for function "
-                << std::hex << _pFunctionAddress << "(error " << GetLastError() <<  ")" << std::endl;
+      LOG_ERROR("unable to rewrite process memory for function %p (error %d)", _pFunctionAddress, GetLastError());
       m_vsSavedFunctions.pop_back();
       return E_FAIL;
    }
@@ -213,12 +214,9 @@ HRESULT Simulacre::replaceFunctionCalls(void* _pFunctionAddress, size_t _sizeFun
 
 HRESULT Simulacre::mock(void* _pFunctionAddress, void* _pOldFunctionAddress, void* _pNewFunctionAddress)
 {
-   // On récupère le symbole qui correspond à la fonction afin de déterminer sa taille.
+   // Get function symbol in order to know its code size.
    SYMBOL_INFO* pSymbolInfo = getSymbol(_pFunctionAddress);
    if (pSymbolInfo == nullptr) {
-      std::cerr << "Simulacre::mock(): unable to find symbol address for function "
-                << std::hex << _pFunctionAddress
-                << " (error " << GetLastError() << ")" << std::endl;
       return E_FAIL;
    }
    size_t sizeFunctionSize = pSymbolInfo->Size;
@@ -254,8 +252,6 @@ HRESULT Simulacre::mockVirtualMethod(const std::string& _sVirtualMethodName,
    size_t sizeMethodSize = 0;
    void* pMethodAddress = getVirtualMethodAddress(_sVirtualMethodName, sizeMethodSize);
    if (pMethodAddress == nullptr) {
-      std::cerr << "CPPMock::mockVirtualMethod(): unable to find symbol address for function "
-                << _sVirtualMethodName << std::endl;
       return E_FAIL;
    }
    return replaceFunctionCalls(
@@ -272,10 +268,8 @@ HRESULT Simulacre::restoreOriginalFunctions()
       BOOL bWriteResult = WriteProcessMemory(
          m_hProcess, it.pAddress, it.vu8Code.data(), it.vu8Code.size(), nullptr
       );
-      if (!bWriteResult)
-      {
-         std::cerr << "Simulacre::restoreOriginalFunctions: unable to restore function code of"
-                   << std::hex << it.pAddress << "(error " << GetLastError() <<  ")" << std::endl;
+      if (!bWriteResult) {
+         LOG_ERROR("unable to restore memory process for function %p (error %d)", it.pAddress, GetLastError());
          return E_FAIL;
       }
    }

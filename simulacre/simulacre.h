@@ -50,7 +50,7 @@ struct Simulacre
     * in the process memory.
     * If the symbol can't be found, the method returns `nullptr`.
     */
-   SYMBOL_INFO* getSymbol(void* _pFunctionAddress);
+   SYMBOL_INFO* getSymbol(void* _pProcessAddress);
 
 
    /* getSymbolName()
@@ -115,7 +115,7 @@ struct Simulacre
 
    /* getMemberFunctionAddress()
     *
-    * Retourne l'adresse de la méthode donnée en paramètre.
+    * Returns the address of the method `function` given as parameter.
     */
    template<typename FunctionType>
    static void* getMemberFunctionAddress(FunctionType _function) {
@@ -136,6 +136,6 @@ struct Simulacre
    std::string m_sModuleName;
    HANDLE m_hProcess;
    DWORD  m_dwProcessBaseAddress;
-   std::vector<uint32_t> m_vui32CallIndirectTable;
+   std::vector<uint32_t> m_vui32IndirectCallsTable;
    std::vector<FunctionCode> m_vsSavedFunctions;
 };
