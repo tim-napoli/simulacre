@@ -28,7 +28,7 @@ Simulacre::Simulacre(const std::string& _sModuleName)
    : m_sModuleName(_sModuleName)
    , m_hProcess(nullptr)
    , m_dwProcessBaseAddress(0)
-   , m_vui32IndirectCallsTable { }
+   , m_vpIndirectCallsTable { }
    , m_vsSavedFunctions { }
 {
    m_hProcess = GetCurrentProcess();
@@ -44,13 +44,17 @@ Simulacre::Simulacre(const std::string& _sModuleName)
    else {
       strcpy_s(szProcessName, _sModuleName.c_str());
    }
+#ifdef _WIN64
+   m_dwProcessBaseAddress = SymLoadModule64(m_hProcess, nullptr, szProcessName, nullptr, 0, 0);
+#else
    m_dwProcessBaseAddress = SymLoadModule(m_hProcess, nullptr, szProcessName, nullptr, 0, 0);
+#endif
    if (m_dwProcessBaseAddress == 0) {
       LOG_ERROR("unable to load symbol table for module %s (error %d)", szProcessName, GetLastError());
       throw;
    }
 
-   m_vui32IndirectCallsTable.reserve(SIMULACRE_MAX_INDIRECT_CALLS);
+   m_vpIndirectCallsTable.reserve(SIMULACRE_MAX_INDIRECT_CALLS);
 }
 
 
@@ -76,7 +80,7 @@ ULONG64 Simulacre::getSymbolAddress(void* _pProcessAddress)
    MODULEINFO sModuleInfo = { 0 };
    GetModuleInformation(m_hProcess, hModule, &sModuleInfo, sizeof(MODULEINFO));
 
-   void* pModuleBaseAddress = (void*)((DWORD)sModuleInfo.lpBaseOfDll);
+   void* pModuleBaseAddress = (void*)sModuleInfo.lpBaseOfDll;
    return (ULONG64)((ULONG64)_pProcessAddress
                     - (ULONG64)pModuleBaseAddress
                     + (ULONG64)m_dwProcessBaseAddress);
@@ -94,7 +98,7 @@ void* Simulacre::symbolToProcessAddress(ULONG64 _ul64VirtualAddress)
    MODULEINFO sModuleInfo = { 0 };
    GetModuleInformation(m_hProcess, hModule, &sModuleInfo, sizeof(MODULEINFO));
 
-   void* pModuleBaseAddress = (void*)((DWORD)sModuleInfo.lpBaseOfDll);
+   void* pModuleBaseAddress = (void*)sModuleInfo.lpBaseOfDll;
    return (void*)(_ul64VirtualAddress - (ULONG64)m_dwProcessBaseAddress + (ULONG64)pModuleBaseAddress);
 }
 
@@ -162,10 +166,16 @@ HRESULT Simulacre::replaceFunctionCalls(void* _pFunctionAddress, size_t _sizeFun
 
    // Search and replace calls of `_pOldFunctionAddress` with calls of `_pNewFunctionAddress`
    for (size_t i = 0; i < vFunctionCode.size(); i++) {
+      // TODO use intptr_t
+#ifdef _WIN64
+      int64_t iAbsoluteCodeAddress = (int64_t)(((char*)_pFunctionAddress) + i);
+#else
       int32_t iAbsoluteCodeAddress = (int32_t)(((char*)_pFunctionAddress) + i);
+#endif
       // Call near, relative, displacement relative to next instruction
       // Jump near, relative, displacement relative to next instruction (Release compilation)
       if (vFunctionCode[i] == 0xe8 || vFunctionCode[i] == 0xe9) {
+         // TODO use intptr_t
          int32_t iCallRelativeAddress = 0;
          memcpy(&iCallRelativeAddress, vFunctionCode.data() + i + 1, sizeof(int32_t));
          int32_t iNextAbsoluteAddress = iAbsoluteCodeAddress + iCallRelativeAddress + 5;
@@ -176,23 +186,43 @@ HRESULT Simulacre::replaceFunctionCalls(void* _pFunctionAddress, size_t _sizeFun
             memcpy(vFunctionCode.data() + i + 1, &iNewNextRelativeAddress, sizeof(int32_t));
          }
       }
+#ifdef _WIN64
+      else if (vFunctionCode[i] == 0xff && vFunctionCode[i + 1] == 0x15) {
+         int64_t iRelativeAddressOfFunctionAddress = 0;
+         memcpy(&iRelativeAddressOfFunctionAddress, vFunctionCode.data() + i + 2, sizeof(uint32_t));
+         int64_t iAbsoluteAddressOfFunctionAddress = iAbsoluteCodeAddress + iRelativeAddressOfFunctionAddress + 6;
+         int64_t iAbsoluteFunctionAddress = 0;
+         memcpy(&iAbsoluteFunctionAddress, (void*)iAbsoluteAddressOfFunctionAddress, sizeof(uint64_t));
+         if (iAbsoluteFunctionAddress == (int64_t)_pOldFunctionAddress) {
+            // Replace the instruction with a near relative call.
+            // We assume there the new function address will always be in the same code segment as the
+            // patched function address. This does not appear to matter in 64 bits since CS=0.
+            int64_t iNextInstructionAddress = (int64_t)_pFunctionAddress + i + 1 + 4;  // 1 + 4 = E8 /m32
+            int32_t iRelativeAddress = (int32_t)((int64_t)_pNewFunctionAddress - iNextInstructionAddress);
+            vFunctionCode[i + 0] = 0xe8;
+            memcpy(vFunctionCode.data() + i + 1, &iRelativeAddress, 4);
+            vFunctionCode[i + 5] = 0x90;  // NOP, could discard 32 highest bytes of RAX ?
+         }
+      }
+#else
       // Call near, absolute indirect, address given in r/m32
       else if (vFunctionCode[i] == 0xff && vFunctionCode[i + 1] == 0x15) {
          uint32_t iCallAbsoluteAddressAddress = 0;
          memcpy(&iCallAbsoluteAddressAddress, vFunctionCode.data() + i + 2, sizeof(uint32_t));
-         uint32_t iCallAbsoluteAddress = 0;
-         memcpy(&iCallAbsoluteAddress, (void*)iCallAbsoluteAddressAddress, sizeof(uint32_t));
-         if (iCallAbsoluteAddress == (uint32_t)_pOldFunctionAddress) {
+         void* pCallAbsoluteAddress = nullptr;
+         memcpy(&pCallAbsoluteAddress, (void*)iCallAbsoluteAddressAddress, sizeof(void*));
+         if (pCallAbsoluteAddress == _pOldFunctionAddress) {
             // Replace absolute address
-            if (m_vui32IndirectCallsTable.size() == m_vui32IndirectCallsTable.capacity()) {
+            if (m_vpIndirectCallsTable.size() == m_vpIndirectCallsTable.capacity()) {
                LOG_ERROR("unable to patch absolute indirect call in %p: call table is full", _pFunctionAddress);
                return E_FAIL;
             }
-            m_vui32IndirectCallsTable.push_back((uint32_t)_pNewFunctionAddress);
-            uint32_t ui32IndirectAddr = (uint32_t)&m_vui32IndirectCallsTable.back();
-            memcpy(vFunctionCode.data() + i + 2, &ui32IndirectAddr, sizeof(uint32_t));
+            m_vpIndirectCallsTable.push_back(_pNewFunctionAddress);
+            void* pIndirectAddr = (void*)&m_vpIndirectCallsTable.back();
+            memcpy(vFunctionCode.data() + i + 2, &pIndirectAddr, sizeof(void*));
          }
       }
+#endif
    }
 
    // Write patched code in process memory

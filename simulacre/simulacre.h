@@ -135,7 +135,7 @@ struct Simulacre
 
    std::string m_sModuleName;
    HANDLE m_hProcess;
-   DWORD  m_dwProcessBaseAddress;
-   std::vector<uint32_t> m_vui32IndirectCallsTable;
+   DWORD64  m_dwProcessBaseAddress;
+   std::vector<void*> m_vpIndirectCallsTable;
    std::vector<FunctionCode> m_vsSavedFunctions;
 };
