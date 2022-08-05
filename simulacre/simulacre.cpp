@@ -154,6 +154,7 @@ SYMBOL_INFO* Simulacre::getSymbolFromName(const std::string& _sSymbolName)
 
 
 
+#pragma optimize( "", off )
 HRESULT Simulacre::replaceFunctionCalls(void* _pFunctionAddress, size_t _sizeFunctionSize,
                                         void* _pOldFunctionAddress, void* _pNewFunctionAddress)
 {
@@ -202,6 +203,24 @@ HRESULT Simulacre::replaceFunctionCalls(void* _pFunctionAddress, size_t _sizeFun
             vFunctionCode[i + 0] = 0xe8;
             memcpy(vFunctionCode.data() + i + 1, &iRelativeAddress, 4);
             vFunctionCode[i + 5] = 0x90;  // NOP, could discard 32 highest bytes of RAX ?
+         }
+      }
+      // REX.W FF, Jump far, absolute indirect, address given in m16:64.
+      else if (vFunctionCode[i] == 0x48 && vFunctionCode[i + 1] == 0xff) {
+         int32_t iRelativeAddressOfFunctionAddress = 0;
+         memcpy(&iRelativeAddressOfFunctionAddress, vFunctionCode.data() + i + 3, sizeof(int32_t));
+         int64_t iNextInstructionAddress = iAbsoluteCodeAddress + 7;
+         int64_t iAbsoluteAddressOfFunctionAddress = iNextInstructionAddress + iRelativeAddressOfFunctionAddress;
+         int64_t iAbsoluteFunctionAddress = 0;
+         memcpy(&iAbsoluteFunctionAddress, (void*)iAbsoluteAddressOfFunctionAddress, sizeof(int64_t));
+         if (iAbsoluteFunctionAddress == (int64_t)_pOldFunctionAddress) {
+            // Replace the instruction with a near relative jmp.
+            iNextInstructionAddress = (int64_t)_pFunctionAddress + i + 1 + 4; // 1 + 4 = E9 /m32
+            int32_t iRelativeAddress = (int32_t)((int64_t)_pNewFunctionAddress - iNextInstructionAddress);
+            vFunctionCode[i + 0] = 0xe9;
+            memcpy(vFunctionCode.data() + i + 1, &iRelativeAddress, 4);
+            vFunctionCode[i + 5] = 0x90;
+            vFunctionCode[i + 6] = 0x90;
          }
       }
 #else
