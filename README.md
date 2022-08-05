@@ -1,6 +1,6 @@
 # Simulacre
 
-Simulacre is a C++ library intended to allow to mock functions in order to write unit tests for Win32 projects.
+Simulacre is a C++ library intended to allow to mock functions in order to write unit tests for Win32/Win64 projects.
 
 
 ## How Does it work ?
@@ -40,6 +40,6 @@ This sample will print when executed `bar` instead of `foo`.
 
 Given Simulacre will only replace calls of `foo()` in the assembly code of the function to mock, it will not change any other occurences of calls to `foo()` in other functions implicitly.
 
-In order to make Simulacre working, you need to disable incremental linking in the code you are testing (`/INCREMENTAL:no`). If you plans to test Release code, you need to disable inlining of functions (`/Ob0`).
+In order to make Simulacre working, you need to disable incremental linking in the code you are testing (`/INCREMENTAL:no`). If you plans to test Release code, you may need to disable inlining of functions (`/Ob0`).
 
-Simulacre only works with Visual Studio compiler and x86 code.
+Simulacre only works with Visual Studio compiler on x86/amd64 code.
